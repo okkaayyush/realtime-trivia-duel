@@ -1,28 +1,52 @@
 # Trivia Duel
 
-Realtime multiplayer trivia with AI-judged answers. Jeopardy-style duel or solo 10-question rounds.
+A real-time multiplayer trivia application featuring AI-judged answers and classic Jeopardy-style mechanics. 
 
-## Setup
+## Features
 
-\`\`\`bash
-npm install
-cp .env.example .env   # add your ANTHROPIC_API_KEY
-npm run dev
-\`\`\`
+* **Real-time Multiplayer:** Synchronized buzzer mechanics and state management.
+* **AI Answer Verification:** Integrates Anthropic's Claude to intelligently judge free-text answers, accommodating typos and alternative phrasings.
+* **Dual Game Modes:** Support for both competitive multiplayer duels and fast-paced solo rounds.
 
-Open http://localhost:3000
+## Tech Stack
 
-## How to play
+* **Backend:** Node.js, Express, Socket.io
+* **Frontend:** Vanilla JavaScript (ES Modules)
+* **AI Integration:** Anthropic Claude API
 
-**Jeopardy Duel**  
-Create a game, share the 6-letter room code. Players pick categories and point values. Buzz in to answer. Wrong answers lose points.
+## Game Modes
 
-**Solo Round**  
-Pick a category (or Mixed), answer 10 questions in 15 seconds each. AI judges your answers.
+### Jeopardy Duel (Multiplayer)
+* Create a game session and share the generated 6-letter room code.
+* Players take turns selecting categories and point values from the board.
+* **Buzzer Mechanics:** First player to buzz in gets the chance to answer. 
+* **Scoring:** Correct answers award points; incorrect answers deduct the selected point value.
 
-## Stack
+### Solo Round
+* Select a specific category or choose a 'Mixed' set.
+* Face a rapid-fire sequence of 10 questions.
+* Strict 15-second time limit per question.
 
-- Node.js + Express + Socket.io
-- Vanilla JS frontend (ES modules)
-- Anthropic Claude as answer judge
-\`\`\`
+## Local Development
+
+1. Install the project dependencies:
+   ```bash
+   npm install
+   ```
+
+2. Configure your environment variables by copying the example file:
+   ```bash
+   cp .env.example .env
+   ```
+
+3. Open the `.env` file and add your Anthropic API key:
+   ```env
+   ANTHROPIC_API_KEY=your_api_key_here
+   ```
+
+4. Start the development server:
+   ```bash
+   npm run dev
+   ```
+
+5. Open your browser and navigate to `http://localhost:3000`.
