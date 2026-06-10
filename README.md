@@ -1,4 +1,4 @@
-# Trivia Duel
+# Triviel : Real-time Trivia Duel
 
 A real-time multiplayer trivia application featuring AI-judged answers and classic Jeopardy-style mechanics. 
 
