@@ -4,12 +4,14 @@ const http = require('http');
 const { Server } = require('socket.io');
 const path = require('path');
 const { v4: uuidv4 } = require('uuid');
-const Anthropic = require('@anthropic-ai/sdk');
+const { GoogleGenerativeAI } = require('@google/generative-ai');
 
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server, { cors: { origin: '*' } });
-const client = new Anthropic();
+
+// Initialize Gemini
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
 app.use(express.static(path.join(__dirname, '../client')));
 app.use(express.json());
@@ -87,12 +89,8 @@ const POINT_VALUES = [200, 400, 600, 800, 1000];
 async function judgeAnswer(question, correctAnswer, playerAnswer) {
   if (!playerAnswer || playerAnswer.trim() === '') return false;
   try {
-    const msg = await client.messages.create({
-      model: 'claude-sonnet-4-20250514',
-      max_tokens: 100,
-      messages: [{
-        role: 'user',
-        content: `You are a trivia judge. Determine if the player's answer is correct.
+    const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+    const prompt = `You are a trivia judge. Determine if the player's answer is correct.
 Question: ${question}
 Correct Answer: ${correctAnswer}
 Player Answer: ${playerAnswer}
@@ -101,10 +99,10 @@ Rules:
 - Accept minor spelling errors, abbreviations, and partial matches if clearly correct
 - Accept "Civil War" for "American Civil War"
 - Reject completely wrong answers
-- Respond with ONLY: CORRECT or INCORRECT`,
-      }],
-    });
-    const verdict = msg.content[0].text.trim().toUpperCase();
+- Respond with ONLY: CORRECT or INCORRECT`;
+
+    const result = await model.generateContent(prompt);
+    const verdict = result.response.text().trim().toUpperCase();
     return verdict.includes('CORRECT') && !verdict.includes('INCORRECT');
   } catch (e) {
     console.error('Judge error:', e.message);
