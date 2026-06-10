@@ -365,5 +365,5 @@ function closeQuestion(room, _winnerId, msg) {
   emitRoomState(room);
 }
 
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 3001;
 server.listen(PORT, () => console.log(`Trivia Duel running on http://localhost:${PORT}`));

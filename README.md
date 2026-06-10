@@ -2,6 +2,8 @@
 
 A real-time multiplayer trivia application featuring AI-judged answers and classic Jeopardy-style mechanics. 
 
+![Trivia Duel Main Menu](./assets/image_82651c.png)
+
 ## Features
 
 * **Real-time Multiplayer:** Synchronized buzzer mechanics and state management.
