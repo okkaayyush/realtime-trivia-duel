@@ -1,0 +1,20 @@
+{
+  "name": "trivia-duel",
+  "version": "1.0.0",
+  "description": "Realtime multiplayer trivia duel with AI judging",
+  "main": "server/index.js",
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "nodemon server/index.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "socket.io": "^4.7.2",
+    "@anthropic-ai/sdk": "^0.20.1",
+    "dotenv": "^16.3.1",
+    "uuid": "^9.0.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.2"
+  }
+}
