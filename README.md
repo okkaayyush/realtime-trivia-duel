@@ -1,18 +1,18 @@
-# Triviel : Real-time Trivia Duel
+# Triviel: Real-Time Trivia Duels
 
 A real-time multiplayer trivia application featuring AI-judged answers and classic Jeopardy-style mechanics. 
 
 ## Features
 
 * **Real-time Multiplayer:** Synchronized buzzer mechanics and state management.
-* **AI Answer Verification:** Integrates Anthropic's Claude to intelligently judge free-text answers, accommodating typos and alternative phrasings.
+* **AI Answer Verification:** Integrates Google's Gemini to intelligently judge free-text answers, accommodating typos and alternative phrasings.
 * **Dual Game Modes:** Support for both competitive multiplayer duels and fast-paced solo rounds.
 
 ## Tech Stack
 
 * **Backend:** Node.js, Express, Socket.io
 * **Frontend:** Vanilla JavaScript (ES Modules)
-* **AI Integration:** Anthropic Claude API
+* **AI Integration:** Google Gemini API (`gemini-2.5-flash`)
 
 ## Game Modes
 
@@ -39,9 +39,9 @@ A real-time multiplayer trivia application featuring AI-judged answers and class
    cp .env.example .env
    ```
 
-3. Open the `.env` file and add your Anthropic API key:
+3. Open the `.env` file and add your Gemini API key:
    ```env
-   ANTHROPIC_API_KEY=your_api_key_here
+   GEMINI_API_KEY=your_api_key_here
    ```
 
 4. Start the development server:
