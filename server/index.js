@@ -9,17 +9,13 @@ const { GoogleGenerativeAI } = require('@google/generative-ai');
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server, { cors: { origin: '*' } });
-
-// Initialize Gemini
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
 app.use(express.static(path.join(__dirname, '../client')));
 app.use(express.json());
 
-// ── In-memory state ──────────────────────────────────────────────
-const rooms = {}; // roomId -> room object
+const rooms = {};
 
-// ── Trivia bank ──────────────────────────────────────────────────
 const CATEGORIES = {
   'Science': [
     { q: 'What is the chemical symbol for gold?', a: 'Au' },
@@ -85,33 +81,26 @@ const CATEGORIES = {
 
 const POINT_VALUES = [200, 400, 600, 800, 1000];
 
-// ── AI Judge ──────────────────────────────────────────────────────
 async function judgeAnswer(question, correctAnswer, playerAnswer) {
-  if (!playerAnswer || playerAnswer.trim() === '') return false;
+  if (!playerAnswer || !playerAnswer.trim()) return false;
+  const fallback = playerAnswer.trim().toLowerCase().includes(correctAnswer.trim().toLowerCase());
   try {
-    const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
-    const prompt = `You are a trivia judge. Determine if the player's answer is correct.
-Question: ${question}
-Correct Answer: ${correctAnswer}
-Player Answer: ${playerAnswer}
-
-Rules:
-- Accept minor spelling errors, abbreviations, and partial matches if clearly correct
-- Accept "Civil War" for "American Civil War"
-- Reject completely wrong answers
-- Respond with ONLY: CORRECT or INCORRECT`;
-
-    const result = await model.generateContent(prompt);
-    const verdict = result.response.text().trim().toUpperCase();
-    return verdict.includes('CORRECT') && !verdict.includes('INCORRECT');
+    const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
+    const result = await Promise.race([
+      model.generateContent(
+        `You are a trivia judge. Is the player's answer correct?\nQuestion: ${question}\nCorrect: ${correctAnswer}\nPlayer: ${playerAnswer}\nReply with ONLY the word CORRECT or INCORRECT.`
+      ),
+      new Promise((_, r) => setTimeout(() => r(new Error('timeout')), 5000))
+    ]);
+    const text = result.response.text().trim().toUpperCase();
+    console.log('Judge verdict:', text);
+    return text.startsWith('CORRECT');
   } catch (e) {
-    console.error('Judge error:', e.message);
-    // Fallback: simple string comparison
-    return playerAnswer.trim().toLowerCase().includes(correctAnswer.toLowerCase());
+    console.error('Judge fallback:', e.message);
+    return fallback;
   }
 }
 
-// ── Room helpers ──────────────────────────────────────────────────
 function buildJeopardyBoard() {
   const board = {};
   for (const [cat, questions] of Object.entries(CATEGORIES)) {
@@ -119,7 +108,6 @@ function buildJeopardyBoard() {
       points: pts,
       question: questions[i],
       answered: false,
-      answeredBy: null,
     }));
   }
   return board;
@@ -128,242 +116,221 @@ function buildJeopardyBoard() {
 function buildSoloRound(category) {
   const pool = category === 'Mixed'
     ? Object.values(CATEGORIES).flat()
-    : CATEGORIES[category] || Object.values(CATEGORIES).flat();
-  const shuffled = pool.sort(() => Math.random() - 0.5).slice(0, 10);
-  return shuffled;
+    : (CATEGORIES[category] || Object.values(CATEGORIES).flat());
+  return [...pool].sort(() => Math.random() - 0.5).slice(0, 10);
 }
 
-function createRoom(mode, hostId, hostName, category) {
-  const roomId = uuidv4().slice(0, 6).toUpperCase();
-  const room = {
-    id: roomId,
-    mode, // 'jeopardy' | 'solo'
-    players: {},
-    state: 'lobby', // lobby | playing | finished
-    currentQuestion: null,
-    answerTimer: null,
-    buzzTimer: null,
-    buzzedPlayer: null,
-    board: mode === 'jeopardy' ? buildJeopardyBoard() : null,
-    soloQuestions: mode === 'solo' ? buildSoloRound(category) : null,
-    soloIndex: 0,
-    category: category || 'Mixed',
-    host: hostId,
-  };
-  room.players[hostId] = { id: hostId, name: hostName, score: 0, isHost: true };
-  rooms[roomId] = room;
-  return room;
-}
-
-function getRoomSafe(roomId) {
-  return rooms[roomId] || null;
-}
-
-function clearRoomTimers(room) {
-  if (room.answerTimer) { clearTimeout(room.answerTimer); room.answerTimer = null; }
-  if (room.buzzTimer) { clearTimeout(room.buzzTimer); room.buzzTimer = null; }
-}
-
-function emitRoomState(room) {
-  io.to(room.id).emit('room:state', sanitizeRoom(room));
-}
-
-function sanitizeRoom(room) {
-  // Don't send answer to clients
-  const r = { ...room };
-  if (r.currentQuestion) {
-    r.currentQuestion = { ...r.currentQuestion };
-    delete r.currentQuestion.answer;
-  }
-  return r;
-}
-
-// ── Socket handlers ───────────────────────────────────────────────
 io.on('connection', (socket) => {
-  console.log('connect', socket.id);
+  console.log('connected:', socket.id);
 
   socket.on('room:create', ({ mode, name, category }) => {
-    const room = createRoom(mode, socket.id, name, category);
-    socket.join(room.id);
-    socket.emit('room:joined', { roomId: room.id, playerId: socket.id });
-    emitRoomState(room);
+    const roomId = uuidv4().slice(0, 6).toUpperCase();
+    const room = {
+      id: roomId,
+      mode,
+      category: category || 'Mixed',
+      host: socket.id,
+      players: {
+        [socket.id]: { id: socket.id, name, score: 0, isHost: true }
+      },
+      state: 'lobby',
+      // solo
+      soloQuestions: mode === 'solo' ? buildSoloRound(category) : null,
+      soloIndex: 0,
+      soloAnswering: null,
+      // jeopardy
+      board: mode === 'jeopardy' ? buildJeopardyBoard() : null,
+      currentQuestion: null,
+      buzzedPlayer: null,
+      // timers (not sent to client)
+      _answerTimer: null,
+      _buzzTimer: null,
+    };
+    rooms[roomId] = room;
+    socket.join(roomId);
+    socket.emit('room:joined', { roomId, playerId: socket.id });
+    socket.emit('room:state', publicRoom(room));
   });
 
   socket.on('room:join', ({ roomId, name }) => {
-    const room = getRoomSafe(roomId.toUpperCase());
+    const room = rooms[roomId.toUpperCase()];
     if (!room) return socket.emit('error', { msg: 'Room not found' });
-    if (room.state !== 'lobby') return socket.emit('error', { msg: 'Game already in progress' });
+    if (room.state !== 'lobby') return socket.emit('error', { msg: 'Game already started' });
     room.players[socket.id] = { id: socket.id, name, score: 0, isHost: false };
     socket.join(room.id);
     socket.emit('room:joined', { roomId: room.id, playerId: socket.id });
-    emitRoomState(room);
-    io.to(room.id).emit('chat', { system: true, msg: `${name} joined the game!` });
+    broadcast(room, 'room:state', publicRoom(room));
+    broadcast(room, 'chat', { system: true, msg: `${name} joined!` });
   });
 
   socket.on('game:start', ({ roomId }) => {
-    const room = getRoomSafe(roomId);
+    const room = rooms[roomId];
     if (!room || room.host !== socket.id) return;
     room.state = 'playing';
-    if (room.mode === 'solo') {
-      startSoloQuestion(room);
-    }
-    emitRoomState(room);
+    broadcast(room, 'room:state', publicRoom(room));
+    if (room.mode === 'solo') sendNextSoloQuestion(room);
   });
 
-  // Jeopardy: host/player picks a clue
   socket.on('jeopardy:pick', ({ roomId, category, pointIndex }) => {
-    const room = getRoomSafe(roomId);
-    if (!room || room.state !== 'playing' || room.mode !== 'jeopardy') return;
-    if (room.currentQuestion) return; // already active
-    const cell = room.board[category]?.[pointIndex];
+    const room = rooms[roomId];
+    if (!room || room.state !== 'playing' || room.currentQuestion) return;
+    const cell = room.board?.[category]?.[pointIndex];
     if (!cell || cell.answered) return;
 
-    room.currentQuestion = {
-      category,
-      pointIndex,
-      points: cell.points,
-      text: cell.question.q,
-      answer: cell.question.a,
-      startedAt: Date.now(),
-      phase: 'buzz', // buzz | answering
-    };
+    room.currentQuestion = { category, pointIndex, points: cell.points, text: cell.question.q, answer: cell.question.a, phase: 'buzz' };
     room.buzzedPlayer = null;
-    emitRoomState(room);
+    broadcast(room, 'question:new', { category, points: cell.points, text: cell.question.q, phase: 'buzz' });
+    broadcast(room, 'room:state', publicRoom(room));
 
-    // 8s to buzz in
-    room.buzzTimer = setTimeout(() => {
-      if (!room.currentQuestion || room.currentQuestion.phase !== 'buzz') return;
-      closeQuestion(room, null, 'No one buzzed in');
+    room._buzzTimer = setTimeout(() => {
+      if (!room.currentQuestion) return;
+      broadcast(room, 'chat', { system: true, msg: 'No one buzzed in.' });
+      closeJeopardyQuestion(room);
     }, 8000);
   });
 
-  // Jeopardy: player buzzes in
   socket.on('jeopardy:buzz', ({ roomId }) => {
-    const room = getRoomSafe(roomId);
-    if (!room || !room.currentQuestion || room.currentQuestion.phase !== 'buzz') return;
-    if (room.buzzedPlayer) return; // already buzzed
-
-    clearTimeout(room.buzzTimer);
+    const room = rooms[roomId];
+    if (!room || !room.currentQuestion || room.currentQuestion.phase !== 'buzz' || room.buzzedPlayer) return;
+    clearTimeout(room._buzzTimer);
     room.buzzedPlayer = socket.id;
     room.currentQuestion.phase = 'answering';
-    room.currentQuestion.answerDeadline = Date.now() + 10000;
-    emitRoomState(room);
-    io.to(room.id).emit('chat', { system: true, msg: `${room.players[socket.id]?.name} buzzed in!` });
+    broadcast(room, 'chat', { system: true, msg: `${room.players[socket.id]?.name} buzzed in!` });
+    broadcast(room, 'room:state', publicRoom(room));
 
-    room.answerTimer = setTimeout(() => {
-      closeQuestion(room, socket.id, 'Time ran out');
+    room._answerTimer = setTimeout(() => {
+      if (!room.currentQuestion) return;
+      const player = room.players[socket.id];
+      if (player) player.score -= room.currentQuestion.points;
+      broadcast(room, 'answer:result', { playerId: socket.id, correct: false, answer: '', correctAnswer: room.currentQuestion.answer, points: -room.currentQuestion.points, timeout: true });
+      broadcast(room, 'chat', { system: true, msg: `Time ran out! ${player?.name} loses ${room.currentQuestion.points}` });
+      closeJeopardyQuestion(room);
     }, 10000);
   });
 
-  // Jeopardy: player submits answer
   socket.on('answer:submit', async ({ roomId, answer }) => {
-    const room = getRoomSafe(roomId);
-    if (!room || !room.currentQuestion) return;
+    const room = rooms[roomId];
+    if (!room) return;
 
     if (room.mode === 'jeopardy') {
-      if (room.buzzedPlayer !== socket.id) return;
-      clearRoomTimers(room);
-      const correct = await judgeAnswer(room.currentQuestion.text, room.currentQuestion.answer, answer);
+      if (!room.currentQuestion || room.buzzedPlayer !== socket.id) return;
+      clearTimeout(room._answerTimer);
+      clearTimeout(room._buzzTimer);
+      const { text, answer: correct_a, points } = room.currentQuestion;
       const player = room.players[socket.id];
-      const pts = room.currentQuestion.points;
+      const correct = await judgeAnswer(text, correct_a, answer);
+      if (correct) player.score += points;
+      else player.score -= points;
+      broadcast(room, 'answer:result', { playerId: socket.id, correct, answer, correctAnswer: correct_a, points: correct ? points : -points });
+      broadcast(room, 'chat', { system: true, msg: correct ? `${player.name} got it! +${points}` : `Wrong! ${player.name} loses ${points}` });
+      closeJeopardyQuestion(room);
 
-      if (correct) {
-        player.score += pts;
-        io.to(room.id).emit('answer:result', { playerId: socket.id, correct: true, answer, correctAnswer: room.currentQuestion.answer, points: pts });
-        closeQuestion(room, null, `${player.name} got it right! +${pts}`);
-      } else {
-        player.score -= pts;
-        io.to(room.id).emit('answer:result', { playerId: socket.id, correct: false, answer, correctAnswer: room.currentQuestion.answer, points: -pts });
-        closeQuestion(room, null, `Wrong! ${player.name} loses ${pts}`);
-      }
     } else if (room.mode === 'solo') {
       if (room.soloAnswering !== socket.id) return;
-      clearRoomTimers(room);
+      clearTimeout(room._answerTimer);
+      room.soloAnswering = null;
+
       const q = room.soloQuestions[room.soloIndex];
       const correct = await judgeAnswer(q.q, q.a, answer);
       const player = room.players[socket.id];
       if (correct) player.score += 100;
-      room.soloAnswering = null;
 
+      console.log(`Solo answer: "${answer}" → ${correct ? 'CORRECT' : 'WRONG'}`);
+
+      // Send result first
       socket.emit('answer:result', { correct, answer, correctAnswer: q.a, points: correct ? 100 : 0 });
 
+      // Advance
       room.soloIndex++;
       if (room.soloIndex >= room.soloQuestions.length) {
         room.state = 'finished';
-        emitRoomState(room);
+        broadcast(room, 'game:finished', { players: room.players });
       } else {
-        setTimeout(() => startSoloQuestion(room), 2000);
+        // Wait 2s then send next question
+        setTimeout(() => sendNextSoloQuestion(room), 2000);
       }
     }
-    emitRoomState(room);
   });
 
   socket.on('disconnect', () => {
     for (const room of Object.values(rooms)) {
-      if (room.players[socket.id]) {
-        const name = room.players[socket.id].name;
-        delete room.players[socket.id];
-        io.to(room.id).emit('chat', { system: true, msg: `${name} left.` });
-        if (Object.keys(room.players).length === 0) {
-          delete rooms[room.id];
-        } else {
-          emitRoomState(room);
-        }
+      if (!room.players[socket.id]) continue;
+      const name = room.players[socket.id].name;
+      delete room.players[socket.id];
+      if (Object.keys(room.players).length === 0) {
+        delete rooms[room.id];
+      } else {
+        broadcast(room, 'chat', { system: true, msg: `${name} left.` });
+        broadcast(room, 'room:state', publicRoom(room));
       }
     }
   });
 });
 
-function startSoloQuestion(room) {
+function sendNextSoloQuestion(room) {
   const q = room.soloQuestions[room.soloIndex];
-  room.currentQuestion = {
-    text: q.q,
-    answer: q.a,
-    index: room.soloIndex,
-    total: room.soloQuestions.length,
-    phase: 'answering',
-    startedAt: Date.now(),
-  };
+  if (!q) return;
   const playerId = Object.keys(room.players)[0];
   room.soloAnswering = playerId;
-  emitRoomState(room);
+  room.currentQuestion = { text: q.q, answer: q.a, index: room.soloIndex, total: room.soloQuestions.length };
 
-  room.answerTimer = setTimeout(() => {
-    const player = room.players[playerId];
-    if (player) {
-      io.to(room.id).emit('answer:result', { correct: false, answer: '', correctAnswer: q.a, points: 0, timeout: true });
-    }
-    room.soloIndex++;
+  // Send the question directly as its own event
+  io.to(room.id).emit('solo:question', {
+    text: q.q,
+    index: room.soloIndex,
+    total: room.soloQuestions.length,
+    category: room.category,
+    scores: room.players,
+  });
+
+  room._answerTimer = setTimeout(() => {
+    if (room.soloAnswering !== playerId) return;
     room.soloAnswering = null;
+    io.to(room.id).emit('answer:result', { correct: false, answer: '', correctAnswer: q.a, points: 0, timeout: true });
+    room.soloIndex++;
     if (room.soloIndex >= room.soloQuestions.length) {
       room.state = 'finished';
-      emitRoomState(room);
+      io.to(room.id).emit('game:finished', { players: room.players });
     } else {
-      setTimeout(() => startSoloQuestion(room), 2000);
+      setTimeout(() => sendNextSoloQuestion(room), 2000);
     }
   }, 15000);
 }
 
-function closeQuestion(room, _winnerId, msg) {
-  clearRoomTimers(room);
+function closeJeopardyQuestion(room) {
   const cell = room.board?.[room.currentQuestion?.category]?.[room.currentQuestion?.pointIndex];
-  if (cell) {
-    cell.answered = true;
-    cell.answeredBy = _winnerId;
-  }
+  if (cell) cell.answered = true;
   room.currentQuestion = null;
   room.buzzedPlayer = null;
-  if (msg) io.to(room.id).emit('chat', { system: true, msg });
+  clearTimeout(room._answerTimer);
+  clearTimeout(room._buzzTimer);
 
-  // Check if board complete
-  if (room.mode === 'jeopardy') {
-    const allDone = Object.values(room.board).every(cat => cat.every(c => c.answered));
-    if (allDone) {
-      room.state = 'finished';
-    }
+  const allDone = room.board && Object.values(room.board).every(cat => cat.every(c => c.answered));
+  if (allDone) {
+    room.state = 'finished';
+    broadcast(room, 'game:finished', { players: room.players });
+  } else {
+    broadcast(room, 'room:state', publicRoom(room));
   }
-  emitRoomState(room);
+}
+
+function publicRoom(room) {
+  return {
+    id: room.id,
+    mode: room.mode,
+    category: room.category,
+    host: room.host,
+    players: room.players,
+    state: room.state,
+    board: room.board,
+    currentQuestion: room.currentQuestion ? { ...room.currentQuestion, answer: undefined } : null,
+    buzzedPlayer: room.buzzedPlayer,
+  };
+}
+
+function broadcast(room, event, data) {
+  io.to(room.id).emit(event, data);
 }
 
 const PORT = process.env.PORT || 3001;
-server.listen(PORT, () => console.log(`Trivia Duel running on http://localhost:${PORT}`));
+server.listen(PORT, () => console.log(`Trivia Duel on http://localhost:${PORT}`));
